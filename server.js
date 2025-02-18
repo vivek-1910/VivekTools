@@ -20,22 +20,26 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   const inputPath = path.join("/tmp", req.file.filename);
   const outputPath = path.join("/tmp", `compressed_${req.file.filename}`);
 
+  const compressionLevel = req.body.compression || "medium"; // Default to "medium" if no option is selected
+
   // Get the size of the uploaded PDF
   const fileSize = fs.statSync(inputPath).size / 1024; // File size in KB
 
   // Log the initial PDF size
-  console.log(`Initial Compressed PDF Size: ${fileSize.toFixed(2)} KB`);
+  console.log(`Initial PDF Size: ${fileSize.toFixed(2)} KB`);
 
-  // Default Ghostscript command for aggressive compression (screen setting)
-  let gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+  let gsCommand;
 
-  // Apply stronger compression if the file size is large
-  if (fileSize > 5000) {
-    console.log("Compression not sufficient, re-compressing...");
+  // Determine the Ghostscript command based on the selected compression level
+  if (compressionLevel === "more") {
+    console.log("Applying more compression...");
     gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dColorImageResolution=72 -dGrayImageResolution=72 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-  } else if (fileSize > 1000) {
-    console.log("File size moderate, applying medium compression...");
+  } else if (compressionLevel === "medium") {
+    console.log("Applying medium compression...");
     gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=150 -dGrayImageResolution=150 -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+  } else {
+    console.log("Applying less compression...");
+    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
   }
 
   // Log the Ghostscript command to be run
