@@ -18,7 +18,7 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
   const inputPath = path.join("/tmp", req.file.filename);
-  const outputPath = path.join("/tmp", `compressed_${Date.now()}.pdf`);
+  const outputPath = path.join("/tmp", `compressed_${req.file.filename}`);
 
   // Get the size of the uploaded PDF
   const fileSize = fs.statSync(inputPath).size / 1024; // File size in KB
@@ -26,10 +26,10 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   // Log the initial PDF size
   console.log(`Initial Compressed PDF Size: ${fileSize.toFixed(2)} KB`);
 
-  // Default Ghostscript command with aggressive compression
+  // Default Ghostscript command for aggressive compression (screen setting)
   let gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
 
-  // If the file size is too large, apply stronger compression
+  // Apply stronger compression if the file size is large
   if (fileSize > 5000) {
     console.log("Compression not sufficient, re-compressing...");
     gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dColorImageResolution=72 -dGrayImageResolution=72 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
@@ -37,6 +37,9 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
     console.log("File size moderate, applying medium compression...");
     gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=150 -dGrayImageResolution=150 -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
   }
+
+  // Log the Ghostscript command to be run
+  console.log("Running Ghostscript command:", gsCommand);
 
   // Execute the Ghostscript command for compression
   exec(gsCommand, (error) => {
