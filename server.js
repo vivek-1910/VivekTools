@@ -26,21 +26,42 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   }
 
   let gsCommand = "";
-
+  let pdfSettings = "-dPDFSETTINGS=/screen"; // Default compression settings
+  let resolution = 72; // Default resolution (72 DPI for screen)
+  
   // Determine the appropriate Ghostscript settings based on the desired size
   if (desiredSize.endsWith("KB")) {
-    // Convert KB to approximate resolution (this is just a basic approach for illustration)
+    // Convert KB to an approximate resolution
     const kbSize = parseInt(desiredSize.replace("KB", "").trim());
-    const resolution = Math.max(72, kbSize / 10); // Higher compression for smaller file size
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -r${resolution} -sOutputFile=${outputPath} ${inputPath}`;
+    if (kbSize < 100) {
+      pdfSettings = "-dPDFSETTINGS=/ebook"; // Better compression for very small file sizes
+      resolution = 72; // Lower resolution for smaller file sizes
+    } else if (kbSize < 500) {
+      pdfSettings = "-dPDFSETTINGS=/printer";
+      resolution = 150; // Slightly better resolution for medium size
+    } else {
+      pdfSettings = "-dPDFSETTINGS=/prepress";
+      resolution = 300; // Higher resolution for larger files
+    }
   } else if (desiredSize.endsWith("MB")) {
-    // Convert MB to approximate resolution
+    // Convert MB to an approximate resolution
     const mbSize = parseInt(desiredSize.replace("MB", "").trim());
-    const resolution = Math.max(72, mbSize * 10); // Higher resolution for larger file size
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -r${resolution} -sOutputFile=${outputPath} ${inputPath}`;
+    if (mbSize < 1) {
+      pdfSettings = "-dPDFSETTINGS=/screen";
+      resolution = 72; // For smaller files
+    } else if (mbSize < 5) {
+      pdfSettings = "-dPDFSETTINGS=/ebook";
+      resolution = 150; // Medium size PDFs
+    } else {
+      pdfSettings = "-dPDFSETTINGS=/printer";
+      resolution = 300; // Higher quality for larger PDFs
+    }
   } else {
     return res.status(400).json({ error: "Invalid size format. Please use KB or MB." });
   }
+
+  // Ghostscript command with appropriate settings
+  gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 ${pdfSettings} -dNOPAUSE -dBATCH -r${resolution} -sOutputFile=${outputPath} ${inputPath}`;
 
   exec(gsCommand, (error) => {
     if (error) {
@@ -48,10 +69,30 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
       return res.status(500).json({ error: "Compression failed" });
     }
 
-    res.download(outputPath, "compressed.pdf", () => {
-      fs.unlinkSync(inputPath);
-      fs.unlinkSync(outputPath);
-    });
+    // Check if the file size meets the desired size (this can be fine-tuned later)
+    const compressedFileSize = fs.statSync(outputPath).size / 1024; // Size in KB
+    console.log("Compressed PDF Size:", compressedFileSize);
+
+    // If the compressed size is much larger than the target, adjust and re-compress (basic approach)
+    if (compressedFileSize > parseInt(desiredSize.replace("KB", "").replace("MB", ""))) {
+      console.log("Compression not sufficient, re-compressing...");
+      // Re-run compression with stronger settings if size isn't met
+      exec(gsCommand, (retryError) => {
+        if (retryError) {
+          console.error("Retry compression error:", retryError);
+          return res.status(500).json({ error: "Compression failed after retry" });
+        }
+        res.download(outputPath, "compressed.pdf", () => {
+          fs.unlinkSync(inputPath);
+          fs.unlinkSync(outputPath);
+        });
+      });
+    } else {
+      res.download(outputPath, "compressed.pdf", () => {
+        fs.unlinkSync(inputPath);
+        fs.unlinkSync(outputPath);
+      });
+    }
   });
 });
 
