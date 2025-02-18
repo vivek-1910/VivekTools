@@ -36,13 +36,13 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   // Calculate adjusted resolution for each compression level
   let adjustedResolution;
   if (compressionLevel === "more") {
-    adjustedResolution = baseResolution / 4; // Quarter of the base resolution
+    adjustedResolution = Math.round(baseResolution / 4); // Round to nearest integer for more compression
     console.log("Applying more compression...");
   } else if (compressionLevel === "medium") {
-    adjustedResolution = baseResolution / 2; // Half of the base resolution
+    adjustedResolution = Math.round(baseResolution / 2); // Round to nearest integer for medium compression
     console.log("Applying medium compression...");
   } else {
-    adjustedResolution = baseResolution; // Same resolution for less compression
+    adjustedResolution = Math.round(baseResolution); // Same resolution for less compression
     console.log("Applying less compression...");
   }
 
