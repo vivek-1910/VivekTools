@@ -8,15 +8,19 @@ const path = require("path");
 const app = express();
 app.use(cors());
 
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ dest: "/tmp" }); // Use /tmp for Render
+
+app.get("/", (req, res) => {
+    res.send("PDF Compression Server is Running!");
+});
 
 app.post("/compress", upload.single("pdf"), (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const inputPath = req.file.path;
-    const outputPath = `compressed_${Date.now()}.pdf`;
+    const inputPath = path.join("/tmp", req.file.filename);
+    const outputPath = path.join("/tmp", `compressed_${Date.now()}.pdf`);
 
-    const gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+    const gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
 
     exec(gsCommand, (error) => {
         if (error) {
@@ -31,4 +35,5 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
     });
 });
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
