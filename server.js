@@ -28,23 +28,26 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   // Log the initial PDF size
   console.log(`Initial PDF Size: ${fileSize.toFixed(2)} KB`);
 
+  // Assuming the PDF has images with a base resolution (e.g., 150 dpi)
+  const baseResolution = 150; // Default value for PDF images (can be extracted if needed)
+
   let gsCommand;
 
-  // Ghostscript command for more compression (highest compression)
+  // Calculate adjusted resolution for each compression level
+  let adjustedResolution;
   if (compressionLevel === "more") {
+    adjustedResolution = baseResolution / 4; // Quarter of the base resolution
     console.log("Applying more compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dColorImageResolution=72 -dGrayImageResolution=72 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dImageFilter=/FlateEncode -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-  } 
-  // Ghostscript command for medium compression (default compression)
-  else if (compressionLevel === "medium") {
+  } else if (compressionLevel === "medium") {
+    adjustedResolution = baseResolution / 2; // Half of the base resolution
     console.log("Applying medium compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=150 -dGrayImageResolution=150 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-  } 
-  // Ghostscript command for less compression (minimal compression)
-  else {
+  } else {
+    adjustedResolution = baseResolution; // Same resolution for less compression
     console.log("Applying less compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/prepress -dColorImageResolution=300 -dGrayImageResolution=300 -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
   }
+
+  // Construct the Ghostscript command based on the adjusted resolution
+  gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=${adjustedResolution} -dGrayImageResolution=${adjustedResolution} -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
 
   // Log the Ghostscript command to be run
   console.log("Running Ghostscript command:", gsCommand);
