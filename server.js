@@ -35,7 +35,7 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
   let pdfSettings = "-dPDFSETTINGS=/screen"; // Default compression settings
   let resolution = 72; // Default resolution (72 DPI for screen)
   let targetSize = parseInt(desiredSize.replace("KB", "").replace("MB", "").trim());
-  
+
   // Validate size input format (KB or MB)
   if (desiredSize.endsWith("KB")) {
     targetSize = parseInt(desiredSize.replace("KB", "").trim());
@@ -71,12 +71,12 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
 
     console.log(`Initial Compressed PDF Size: ${compressedFileSize} KB`);
 
-    // If the file size is much larger than the target, apply further compression
+    // If the file size is still too large, try further aggressive compression
     if (compressedFileSize > targetSize) {
       console.log("Compression not sufficient, re-compressing...");
 
-      // Retry compression with stricter settings
-      gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -r72 -sOutputFile=${outputPath} ${inputPath}`;
+      // Retry with stronger settings
+      gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -r50 -sOutputFile=${outputPath} ${inputPath}`;
 
       exec(gsCommand, (retryError) => {
         if (retryError) {
