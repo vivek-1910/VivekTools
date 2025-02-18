@@ -30,16 +30,20 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
 
   let gsCommand;
 
-  // Determine the Ghostscript command based on the selected compression level
+  // Ghostscript command for more compression (highest compression)
   if (compressionLevel === "more") {
     console.log("Applying more compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dColorImageResolution=72 -dGrayImageResolution=72 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-  } else if (compressionLevel === "medium") {
+    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dColorImageResolution=72 -dGrayImageResolution=72 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dImageFilter=/FlateEncode -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+  } 
+  // Ghostscript command for medium compression (default compression)
+  else if (compressionLevel === "medium") {
     console.log("Applying medium compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=150 -dGrayImageResolution=150 -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-  } else {
+    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=150 -dGrayImageResolution=150 -dDownsampleColorImages=true -dDownsampleGrayImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+  } 
+  // Ghostscript command for less compression (minimal compression)
+  else {
     console.log("Applying less compression...");
-    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
+    gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/prepress -dColorImageResolution=300 -dGrayImageResolution=300 -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
   }
 
   // Log the Ghostscript command to be run
