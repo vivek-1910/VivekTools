@@ -1,66 +1,61 @@
-const express = require("express");
-const multer = require("multer");
-const { exec } = require("child_process");
-const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
+require('dotenv').config();
+const express = require('express');
+const multer = require('multer');
+const cors = require('cors');
+const path = require('path');
+const { createWorker } = require('tesseract.js');
 
 const app = express();
+const PORT = process.env.PORT || 8000;  // Change 7000 to 8000
+
+// Middleware
 app.use(cors());
+app.use(express.json());
 
-const upload = multer({ dest: "/tmp" });
+// Configure multer for in-memory file handling (no disk storage)
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.get("/", (req, res) => {
-  res.send("PDF Compression Server is Running!");
-});
-
-app.post("/compress", upload.single("pdf"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-  const inputPath = path.join("/tmp", req.file.filename);
-  const outputPath = path.join("/tmp", `compressed_${req.file.filename}`);
-
-  const compressionLevel = req.body.compression || "medium"; 
-
-  const fileSize = fs.statSync(inputPath).size / 1024; 
-
-  console.log(`Initial PDF Size: ${fileSize.toFixed(2)} KB`);
-
-  const baseResolution = 150; 
-
-  let gsCommand;
-
-  let adjustedResolution;
-  if (compressionLevel === "more") {
-    adjustedResolution = Math.round(baseResolution / 4); 
-    console.log("Applying more compression...");
-  } else if (compressionLevel === "medium") {
-    adjustedResolution = Math.round(baseResolution / 2); 
-    console.log("Applying medium compression...");
-  } else {
-    adjustedResolution = Math.round(baseResolution); 
-    console.log("Applying less compression...");
-  }
-
-  gsCommand = `/usr/bin/gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dColorImageResolution=${adjustedResolution} -dGrayImageResolution=${adjustedResolution} -dDownsampleColorImages=true -dDownsampleGrayImages=true -dRemoveAllAnnotations=true -dOptimize=true -dAutoFilterColorImages=true -dNOPAUSE -dBATCH -sOutputFile=${outputPath} ${inputPath}`;
-
-  console.log("Running Ghostscript command:", gsCommand);
-
-  exec(gsCommand, (error) => {
-    if (error) {
-      console.error("Compression error:", error);
-      return res.status(500).json({ error: "Compression failed" });
+// OCR Processing Endpoint
+app.post('/api/ocr', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
     }
 
-    const compressedFileSize = fs.statSync(outputPath).size / 1024; 
-    console.log(`Final Compressed PDF Size: ${compressedFileSize.toFixed(2)} KB`);
-
-    res.download(outputPath, "compressed.pdf", () => {
-      fs.unlinkSync(inputPath);
-      fs.unlinkSync(outputPath);
+    const worker = await createWorker({
+      logger: m => console.log(m),
     });
-  });
+
+    try {
+      await worker.loadLanguage('eng');
+      await worker.initialize('eng');
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:%/()-_, ',
+        preserve_interword_spaces: '1',
+      });
+
+      // Process image from memory buffer
+      const { data: { text } } = await worker.recognize(req.file.buffer);
+      
+      await worker.terminate();
+      return res.json({ text });
+    } catch (error) {
+      await worker.terminate();
+      throw error;
+    }
+  } catch (error) {
+    console.error('OCR Error:', error);
+    res.status(500).json({ error: 'Failed to process image' });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Health check
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`OCR Server running on http://localhost:${PORT}`);
+  console.log(`Test with: curl -X POST -F "image=@path/to/your/image.jpg" http://localhost:${PORT}/api/ocr`);
+});
