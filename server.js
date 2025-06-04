@@ -21,13 +21,13 @@ app.post('/api/ocr', upload.single('image'), async (req, res) => {
 
     const fileMime = req.file.mimetype;
 
-    // ✅ If it's a PDF, use pdf-parse (no OCR needed)
+    // ✅ Handle PDF with pdf-parse (no OCR)
     if (fileMime === 'application/pdf') {
       const data = await pdfParse(req.file.buffer);
       return res.json({ text: data.text });
     }
 
-    // ✅ If it's an image, use Tesseract for OCR
+    // ✅ Handle images with Tesseract
     const worker = await createWorker({ logger: m => console.log(m) });
 
     await worker.loadLanguage('eng');
