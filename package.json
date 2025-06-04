@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "description": "Advanced OCR server with PDF and image support",
   "main": "server.js",
-  "type": "module",
+
 
   "engines": {
     "node": ">=16.0.0"
