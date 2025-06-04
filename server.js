@@ -2,60 +2,63 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
-const path = require('path');
 const { createWorker } = require('tesseract.js');
+const { fromBuffer } = require('pdf2pic');
 
 const app = express();
-const PORT = process.env.PORT || 8000;  // Change 7000 to 8000
+const PORT = process.env.PORT || 8000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Configure multer for in-memory file handling (no disk storage)
 const upload = multer({ storage: multer.memoryStorage() });
 
-// OCR Processing Endpoint
 app.post('/api/ocr', upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No image file provided' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
     const worker = await createWorker({
       logger: m => console.log(m),
     });
 
-    try {
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
-      await worker.setParameters({
-        tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:%/()-_, ',
-        preserve_interword_spaces: '1',
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:%/()-_, ',
+      preserve_interword_spaces: '1',
+    });
+
+    let buffer = req.file.buffer;
+
+    if (req.file.mimetype === 'application/pdf') {
+      const convert = fromBuffer(buffer, {
+        density: 150,
+        format: 'png',
+        width: 1200,
+        height: 1600,
       });
 
-      // Process image from memory buffer
-      const { data: { text } } = await worker.recognize(req.file.buffer);
-      
-      await worker.terminate();
-      return res.json({ text });
-    } catch (error) {
-      await worker.terminate();
-      throw error;
+      const page1 = await convert(1); // convert only first page
+      buffer = page1.base64 ? Buffer.from(page1.base64, 'base64') : buffer;
     }
+
+    const { data: { text } } = await worker.recognize(buffer);
+
+    await worker.terminate();
+    return res.json({ text });
+
   } catch (error) {
     console.error('OCR Error:', error);
-    res.status(500).json({ error: 'Failed to process image' });
+    res.status(500).json({ error: 'Failed to process file' });
   }
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`OCR Server running on http://localhost:${PORT}`);
-  console.log(`Test with: curl -X POST -F "image=@path/to/your/image.jpg" http://localhost:${PORT}/api/ocr`);
+  console.log(`Test with image: curl -X POST -F "image=@yourfile.jpg" http://localhost:${PORT}/api/ocr`);
+  console.log(`Test with PDF: curl -X POST -F "image=@yourfile.pdf" http://localhost:${PORT}/api/ocr`);
 });
