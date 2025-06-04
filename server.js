@@ -1,9 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const pdfParse = require('pdf-parse');
 const { createWorker } = require('tesseract.js');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -21,14 +21,21 @@ app.post('/api/ocr', upload.single('image'), async (req, res) => {
 
     const fileMime = req.file.mimetype;
 
-    // ✅ Handle PDF with pdf-parse (no OCR)
+    // ✅ Handle PDFs with pdf-parse
     if (fileMime === 'application/pdf') {
-      const data = await pdfParse(req.file.buffer);
-      return res.json({ text: data.text });
+      try {
+        const data = await pdfParse(req.file.buffer);
+        return res.json({ text: data.text });
+      } catch (err) {
+        console.error('PDF Parse Error:', err);
+        return res.status(500).json({ error: 'Failed to extract text from PDF' });
+      }
     }
 
     // ✅ Handle images with Tesseract
-    const worker = await createWorker({ logger: m => console.log(m) });
+    const worker = await createWorker({
+      logger: m => console.log(m),
+    });
 
     await worker.loadLanguage('eng');
     await worker.initialize('eng');
@@ -53,5 +60,5 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`OCR Server running on http://localhost:${PORT}`);
-  console.log(`New FIle1.14`);
+  console.log(`New FIle1.17`);
 });
