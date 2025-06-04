@@ -1,9 +1,9 @@
-require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const pdfParse = require('pdf-parse');
 const { createWorker } = require('tesseract.js');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -19,32 +19,28 @@ app.post('/api/ocr', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // Handle PDF files
-    if (req.file.mimetype === 'application/pdf') {
+    const fileMime = req.file.mimetype;
+
+    // ✅ If it's a PDF, use pdf-parse (no OCR needed)
+    if (fileMime === 'application/pdf') {
       const data = await pdfParse(req.file.buffer);
       return res.json({ text: data.text });
     }
 
-    // Handle images (OCR)
-    const worker = await createWorker({
-      logger: m => console.log(m),
+    // ✅ If it's an image, use Tesseract for OCR
+    const worker = await createWorker({ logger: m => console.log(m) });
+
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:%/()-_, ',
+      preserve_interword_spaces: '1',
     });
 
-    try {
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
-      await worker.setParameters({
-        tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:%/()-_, ',
-        preserve_interword_spaces: '1',
-      });
+    const { data: { text } } = await worker.recognize(req.file.buffer);
+    await worker.terminate();
 
-      const { data: { text } } = await worker.recognize(req.file.buffer);
-      await worker.terminate();
-      return res.json({ text });
-    } catch (error) {
-      await worker.terminate();
-      throw error;
-    }
+    return res.json({ text });
   } catch (error) {
     console.error('OCR Error:', error);
     res.status(500).json({ error: 'Failed to process file' });
