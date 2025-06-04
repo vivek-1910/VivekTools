@@ -19,7 +19,7 @@
     "pdf2pic": "^2.1.7",
     "sharp": "^0.32.0",
     "mime-types": "^2.1.35",
-        "pdf-to-text": "^1.1.0"
+    "pdf-to-text": "^0.0.7"
 
   },
   "devDependencies": {
