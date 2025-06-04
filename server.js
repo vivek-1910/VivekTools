@@ -6,7 +6,7 @@ const path = require('path');
 const { createWorker } = require('tesseract.js');
 const { pdf } = require('pdf-parse');
 const { PDFDocument } = require('pdf-lib');
-const { fromBuffer } = require('file-type');
+const FileType = require('file-type');
 const { fromPath } = require('pdf2pic');
 const fs = require('fs');
 const os = require('os');
@@ -136,7 +136,7 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
     }
 
     // Verify file type (in case bypassed multer filter)
-    const fileType = await fromBuffer(req.file.buffer);
+   const fileType = await FileType.fromBuffer(req.file.buffer);
     if (!fileType || !(['application/pdf', 'image/png', 'image/jpeg', 'image/tiff'].includes(fileType.mime))) {
       return res.status(400).json({ error: 'Unsupported file type' });
     }
