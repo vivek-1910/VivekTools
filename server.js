@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
+const compression = require('compression');
 const path = require('path');
 const { createWorker } = require('tesseract.js');
 const pdf = require('pdf-parse');
@@ -11,13 +12,30 @@ const { fromPath } = require('pdf2pic');
 const fs = require('fs');
 const os = require('os');
 const sharp = require('sharp');
+const monitoring = require('./ocrMonitoring');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
 
-// Middleware
+// Performance optimizations
+app.use(compression()); // Enable gzip compression
 app.use(cors());
 app.use(express.json());
+app.disable('x-powered-by'); // Remove Express header
+
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const method = req.method;
+  const url = req.originalUrl || req.url;
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${method} ${url} - ${res.statusCode} (${duration}ms)`);
+  });
+  
+  next();
+});
 
 // Configure multer for in-memory file handling
 const upload = multer({ 
@@ -130,38 +148,83 @@ async function processImageWithOCR(imageBuffer) {
 
 // OCR Processing Endpoint
 app.post('/api/ocr', upload.single('file'), async (req, res) => {
+  const startTime = Date.now();
+  let fileType = 'unknown';
+  let pages = 0;
+  
   try {
     if (!req.file) {
+      monitoring.recordRequest({ 
+        fileType: 'none', 
+        processingTime: Date.now() - startTime, 
+        error: 'No file provided', 
+        success: false 
+      });
       return res.status(400).json({ error: 'No file provided' });
     }
 
     // Verify file type (in case bypassed multer filter)
-const fileType = await fileTypeFromBuffer(req.file.buffer);
-    if (!fileType || !(['application/pdf', 'image/png', 'image/jpeg', 'image/tiff'].includes(fileType.mime))) {
+    const detectedFileType = await fileTypeFromBuffer(req.file.buffer);
+    if (!detectedFileType || !(['application/pdf', 'image/png', 'image/jpeg', 'image/tiff'].includes(detectedFileType.mime))) {
+      monitoring.recordRequest({ 
+        fileType: detectedFileType?.mime || 'unknown', 
+        processingTime: Date.now() - startTime, 
+        error: 'Unsupported file type', 
+        success: false 
+      });
       return res.status(400).json({ error: 'Unsupported file type' });
     }
 
     let result;
-    const startTime = Date.now();
 
-    if (fileType.mime === 'application/pdf') {
+    if (detectedFileType.mime === 'application/pdf') {
+      fileType = 'pdf';
       result = await extractTextFromPDF(req.file.buffer);
+      pages = result.split('\n\n--- PAGE BREAK ---\n\n').length;
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        pages, 
+        success: true 
+      });
+      
       res.json({ 
         text: result,
         fileType: 'pdf',
-        pages: result.split('\n\n--- PAGE BREAK ---\n\n').length,
-        processingTime: Date.now() - startTime
+        pages,
+        processingTime
       });
     } else {
+      fileType = 'image';
       result = await processImageWithOCR(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
       res.json({ 
         text: result,
         fileType: 'image',
-        processingTime: Date.now() - startTime
+        processingTime
       });
     }
   } catch (error) {
     console.error('Processing Error:', error);
+    
+    const processingTime = Date.now() - startTime;
+    monitoring.recordRequest({ 
+      fileType, 
+      processingTime, 
+      error: error.message, 
+      pages, 
+      success: false 
+    });
+    
     res.status(500).json({ 
       error: error.message || 'Failed to process file',
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -176,13 +239,73 @@ app.get('/health', (req, res) => {
     services: {
       pdf: 'active',
       ocr: 'active'
-    }
+    },
+    timestamp: Date.now()
   });
 });
 
+// Comprehensive status endpoint
+app.get('/api/status', (req, res) => {
+  try {
+    const status = monitoring.getStatus();
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      server: 'OCR/PDF Processing Server',
+      ...status,
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+// Simple health check
+app.get('/api/health', (req, res) => {
+  const health = monitoring.getHealth();
+  const statusCode = health.status === 'healthy' ? 200 : health.status === 'critical' ? 503 : 200;
+  res.status(statusCode).json(health);
+});
+
+// Self-ping mechanism to keep server alive on Render
+function startSelfPing() {
+  const PING_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const pingUrl = process.env.RENDER_EXTERNAL_URL || 'https://vivektools.onrender.com';
+  
+  async function selfPing() {
+    try {
+      const response = await fetch(`${pingUrl}/health`);
+      if (response.ok) {
+        console.log(`[Self-Ping] Success - ${new Date().toISOString()}`);
+      } else {
+        console.warn(`[Self-Ping] Failed - Status: ${response.status}`);
+      }
+    } catch (error) {
+      console.warn(`[Self-Ping] Error:`, error.message);
+    }
+  }
+  
+  // Start pinging after 30 seconds, then every 5 minutes
+  setTimeout(() => {
+    selfPing();
+    setInterval(selfPing, PING_INTERVAL);
+    console.log(`[Self-Ping] Started - Interval: 5 minutes, URL: ${pingUrl}`);
+  }, 30000);
+}
+
 // Start server
 app.listen(PORT, () => {
-  console.log(`OCR Server running on http://localhost:${PORT}`);
-  console.log('Supported file types: PDF, PNG, JPEG, TIFF');
-  console.log(`Test with: curl -X POST -F "file=@path/to/your/file.pdf" http://localhost:${PORT}/api/ocr`);
+  console.log(`🚀 OCR Server running on http://localhost:${PORT}`);
+  console.log('📄 Supported file types: PDF, PNG, JPEG, TIFF');
+  console.log('⚡ Compression: Enabled');
+  console.log('📊 Monitoring: Active');
+  console.log(`💉 Test with: curl -X POST -F "file=@path/to/your/file.pdf" http://localhost:${PORT}/api/ocr`);
+  
+  // Start self-ping in production
+  if (process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production') {
+    startSelfPing();
+  }
 });
