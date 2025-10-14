@@ -13,6 +13,9 @@ const fs = require('fs');
 const os = require('os');
 const sharp = require('sharp');
 const monitoring = require('./ocrMonitoring');
+const mammoth = require('mammoth');
+const officeParser = require('officeparser');
+const xlsx = require('xlsx');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -41,14 +44,27 @@ app.use((req, res, next) => {
 const upload = multer({ 
   storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) {
+    const allowedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // DOCX
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', // PPTX
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // XLSX
+      'application/msword', // DOC
+      'application/vnd.ms-powerpoint', // PPT
+      'application/vnd.ms-excel', // XLS
+      'text/plain', // TXT
+      'text/csv', // CSV
+      'application/rtf', // RTF
+    ];
+    
+    if (allowedTypes.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Unsupported file type. Only PDF and images are allowed.'), false);
+      cb(new Error('Unsupported file type. Supported: PDF, DOCX, PPTX, XLSX, DOC, PPT, XLS, TXT, CSV, RTF, and images.'), false);
     }
   },
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
+    fileSize: 20 * 1024 * 1024 // 20MB limit (increased for larger documents)
   }
 });
 
@@ -81,6 +97,104 @@ async function convertPDFPageToImage(pdfBuffer, pageNumber) {
   fs.rmSync(tempDir, { recursive: true, force: true });
 
   return optimizedImage;
+}
+
+// Function to extract text from DOCX
+async function extractTextFromDOCX(buffer) {
+  try {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  } catch (error) {
+    console.error('DOCX Processing Error:', error);
+    throw new Error('Failed to process DOCX: ' + error.message);
+  }
+}
+
+// Function to extract text from PPTX
+async function extractTextFromPPTX(buffer) {
+  try {
+    // Write buffer to temp file for officeparser
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pptx-'));
+    const tempPath = path.join(tempDir, 'temp.pptx');
+    fs.writeFileSync(tempPath, buffer);
+    
+    const text = await officeParser.parseOfficeAsync(tempPath);
+    
+    // Clean up
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return text || '';
+  } catch (error) {
+    console.error('PPTX Processing Error:', error);
+    throw new Error('Failed to process PPTX: ' + error.message);
+  }
+}
+
+// Function to extract text from XLSX/XLS
+async function extractTextFromExcel(buffer) {
+  try {
+    const workbook = xlsx.read(buffer, { type: 'buffer' });
+    let allText = [];
+    
+    workbook.SheetNames.forEach(sheetName => {
+      const sheet = workbook.Sheets[sheetName];
+      const csvText = xlsx.utils.sheet_to_csv(sheet);
+      allText.push(`\n--- Sheet: ${sheetName} ---\n${csvText}`);
+    });
+    
+    return allText.join('\n\n');
+  } catch (error) {
+    console.error('Excel Processing Error:', error);
+    throw new Error('Failed to process Excel file: ' + error.message);
+  }
+}
+
+// Function to extract text from DOC (legacy Word)
+async function extractTextFromDOC(buffer) {
+  try {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-'));
+    const tempPath = path.join(tempDir, 'temp.doc');
+    fs.writeFileSync(tempPath, buffer);
+    
+    const text = await officeParser.parseOfficeAsync(tempPath);
+    
+    // Clean up
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return text || '';
+  } catch (error) {
+    console.error('DOC Processing Error:', error);
+    throw new Error('Failed to process DOC: ' + error.message);
+  }
+}
+
+// Function to extract text from PPT (legacy PowerPoint)
+async function extractTextFromPPT(buffer) {
+  try {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-'));
+    const tempPath = path.join(tempDir, 'temp.ppt');
+    fs.writeFileSync(tempPath, buffer);
+    
+    const text = await officeParser.parseOfficeAsync(tempPath);
+    
+    // Clean up
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return text || '';
+  } catch (error) {
+    console.error('PPT Processing Error:', error);
+    throw new Error('Failed to process PPT: ' + error.message);
+  }
+}
+
+// Function to extract text from plain text files
+async function extractTextFromPlainText(buffer) {
+  try {
+    return buffer.toString('utf-8');
+  } catch (error) {
+    console.error('Text Processing Error:', error);
+    throw new Error('Failed to process text file: ' + error.message);
+  }
 }
 
 // Function to extract text from PDF
@@ -165,19 +279,12 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
 
     // Verify file type (in case bypassed multer filter)
     const detectedFileType = await fileTypeFromBuffer(req.file.buffer);
-    if (!detectedFileType || !(['application/pdf', 'image/png', 'image/jpeg', 'image/tiff'].includes(detectedFileType.mime))) {
-      monitoring.recordRequest({ 
-        fileType: detectedFileType?.mime || 'unknown', 
-        processingTime: Date.now() - startTime, 
-        error: 'Unsupported file type', 
-        success: false 
-      });
-      return res.status(400).json({ error: 'Unsupported file type' });
-    }
-
+    const mimeType = req.file.mimetype || detectedFileType?.mime || 'unknown';
+    
     let result;
 
-    if (detectedFileType.mime === 'application/pdf') {
+    // Handle different file types
+    if (mimeType === 'application/pdf' || detectedFileType?.mime === 'application/pdf') {
       fileType = 'pdf';
       result = await extractTextFromPDF(req.file.buffer);
       pages = result.split('\n\n--- PAGE BREAK ---\n\n').length;
@@ -196,7 +303,103 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
         pages,
         processingTime
       });
-    } else {
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      fileType = 'docx';
+      result = await extractTextFromDOCX(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType: 'docx',
+        processingTime
+      });
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+      fileType = 'pptx';
+      result = await extractTextFromPPTX(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType: 'pptx',
+        processingTime
+      });
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mimeType === 'application/vnd.ms-excel') {
+      fileType = mimeType.includes('openxmlformats') ? 'xlsx' : 'xls';
+      result = await extractTextFromExcel(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType,
+        processingTime
+      });
+    } else if (mimeType === 'application/msword') {
+      fileType = 'doc';
+      result = await extractTextFromDOC(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType: 'doc',
+        processingTime
+      });
+    } else if (mimeType === 'application/vnd.ms-powerpoint') {
+      fileType = 'ppt';
+      result = await extractTextFromPPT(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType: 'ppt',
+        processingTime
+      });
+    } else if (mimeType === 'text/plain' || mimeType === 'text/csv' || mimeType === 'application/rtf') {
+      fileType = mimeType.split('/')[1];
+      result = await extractTextFromPlainText(req.file.buffer);
+      
+      const processingTime = Date.now() - startTime;
+      monitoring.recordRequest({ 
+        fileType, 
+        processingTime, 
+        success: true 
+      });
+      
+      res.json({ 
+        text: result,
+        fileType,
+        processingTime
+      });
+    } else if (detectedFileType && detectedFileType.mime.startsWith('image/')) {
       fileType = 'image';
       result = await processImageWithOCR(req.file.buffer);
       
@@ -212,6 +415,14 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
         fileType: 'image',
         processingTime
       });
+    } else {
+      monitoring.recordRequest({ 
+        fileType: mimeType, 
+        processingTime: Date.now() - startTime, 
+        error: 'Unsupported file type', 
+        success: false 
+      });
+      return res.status(400).json({ error: 'Unsupported file type: ' + mimeType });
     }
   } catch (error) {
     console.error('Processing Error:', error);
@@ -299,7 +510,7 @@ function startSelfPing() {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 OCR Server running on http://localhost:${PORT}`);
-  console.log('📄 Supported file types: PDF, PNG, JPEG, TIFF');
+  console.log('📄 Supported file types: PDF, DOCX, PPTX, XLSX, DOC, PPT, XLS, TXT, CSV, RTF, PNG, JPEG, TIFF');
   console.log('⚡ Compression: Enabled');
   console.log('📊 Monitoring: Active');
   console.log(`💉 Test with: curl -X POST -F "file=@path/to/your/file.pdf" http://localhost:${PORT}/api/ocr`);
