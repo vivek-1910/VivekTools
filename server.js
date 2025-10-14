@@ -20,52 +20,8 @@ const xlsx = require('xlsx');
 const app = express();
 const PORT = process.env.PORT || 8000;
 
-// Performance: Reusable Tesseract worker pool
-let tesseractWorkerPool = [];
-const WORKER_POOL_SIZE = 4; // Increased for better parallelism
-let workerPoolInitialized = false;
-
-async function initWorkerPool() {
-  if (workerPoolInitialized) return;
-  console.log('[OCR] Initializing Tesseract worker pool...');
-  
-  for (let i = 0; i < WORKER_POOL_SIZE; i++) {
-    const worker = await createWorker({
-      logger: () => {}, // Disable logging for speed
-      errorHandler: (err) => console.error('[OCR Worker Error]', err)
-    });
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
-    await worker.setParameters({
-      tessedit_pageseg_mode: '1', // Auto page segmentation
-      preserve_interword_spaces: '1',
-    });
-    tesseractWorkerPool.push({ worker, busy: false });
-  }
-  
-  workerPoolInitialized = true;
-  console.log(`[OCR] Worker pool initialized with ${WORKER_POOL_SIZE} workers`);
-}
-
-async function getAvailableWorker() {
-  await initWorkerPool();
-  
-  // Find available worker
-  let availableWorker = tesseractWorkerPool.find(w => !w.busy);
-  
-  // If all busy, wait for one to become available
-  while (!availableWorker) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    availableWorker = tesseractWorkerPool.find(w => !w.busy);
-  }
-  
-  availableWorker.busy = true;
-  return availableWorker;
-}
-
-function releaseWorker(workerObj) {
-  workerObj.busy = false;
-}
+// NO WORKER POOL - too memory intensive for 512MB RAM
+// Create workers on-demand and terminate immediately after use
 
 // Performance optimizations
 app.use(compression()); // Enable gzip compression
@@ -115,32 +71,32 @@ const upload = multer({
   }
 });
 
-// Function to convert PDF page to image (optimized)
+// Function to convert PDF page to image (low memory mode)
 async function convertPDFPageToImage(pdfBuffer, pageNumber) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-'));
   const tempPdfPath = path.join(tempDir, 'temp.pdf');
   fs.writeFileSync(tempPdfPath, pdfBuffer);
 
   const options = {
-    density: 200, // Reduced from 300 - faster, still accurate
+    density: 150, // Lower density for 512MB RAM
     saveFilename: 'page',
     savePath: tempDir,
     format: 'png',
-    width: 1200,
-    height: 1600
+    width: 1000, // Smaller
+    height: 1200  // Smaller
   };
 
   const convert = fromPath(tempPdfPath, options);
   const { path: imagePath } = await convert(pageNumber, { responseType: 'image' });
 
-  // Optimize image for OCR - faster processing
+  // Optimize image for OCR - smaller for low RAM
   const optimizedImage = await sharp(imagePath)
-    .resize(1400, 1400, { fit: 'inside', withoutEnlargement: true }) // Smaller = faster
+    .resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
     .greyscale()
     .normalize()
     .toBuffer();
 
-  // Clean up temp files
+  // Clean up temp files immediately
   fs.rmSync(tempDir, { recursive: true, force: true });
 
   return optimizedImage;
@@ -269,43 +225,44 @@ async function extractTextFromPDF(pdfBuffer) {
       return data.text;
     }
     
-    // Scanned PDF - use OCR but be smart about it
+    // Scanned PDF - use OCR but be VERY conservative (low RAM)
     const pdfDoc = await PDFDocument.load(pdfBuffer);
     const totalPages = pdfDoc.getPageCount();
     
-    // Limit pages for speed (most users only need first few pages)
-    const pageCount = Math.min(totalPages, 10); // Reduced from 30 to 10
+    // Only process first 2 pages for 512MB RAM constraint
+    const pageCount = Math.min(totalPages, 2);
     const textPages = [];
     
-    console.log(`[PDF OCR] Processing ${pageCount} of ${totalPages} pages in parallel...`);
+    console.log(`[PDF OCR] Processing ${pageCount} of ${totalPages} pages (limited by server RAM)...`);
     
-    // Process ALL pages in parallel (not batched) - maximum speed
-    const promises = [];
+    // Process ONE page at a time (no parallelism - saves memory)
     for (let i = 0; i < pageCount; i++) {
-      promises.push(
-        (async () => {
-          try {
-            const pageImage = await convertPDFPageToImage(pdfBuffer, i + 1);
-            const workerObj = await getAvailableWorker();
-            
-            try {
-              const { data: { text } } = await workerObj.worker.recognize(pageImage);
-              return { index: i, text };
-            } finally {
-              releaseWorker(workerObj);
-            }
-          } catch (pageError) {
-            console.error(`Error processing page ${i + 1}:`, pageError);
-            return { index: i, text: `[Error on page ${i + 1}]` };
-          }
-        })()
-      );
+      try {
+        console.log(`[PDF OCR] Processing page ${i + 1}/${pageCount}...`);
+        
+        const pageImage = await convertPDFPageToImage(pdfBuffer, i + 1);
+        
+        // Create worker, use it, terminate immediately (save RAM)
+        const worker = await createWorker({
+          logger: () => {},
+          errorHandler: (err) => console.error('[OCR Error]', err)
+        });
+        
+        await worker.loadLanguage('eng');
+        await worker.initialize('eng');
+        
+        const { data: { text } } = await worker.recognize(pageImage);
+        textPages.push(text);
+        
+        // CRITICAL: Terminate worker immediately to free memory
+        await worker.terminate();
+        
+        console.log(`[PDF OCR] Page ${i + 1} complete, worker terminated`);
+      } catch (pageError) {
+        console.error(`Error processing page ${i + 1}:`, pageError);
+        textPages.push(`[Error on page ${i + 1}]`);
+      }
     }
-    
-    // Wait for all pages to complete
-    const results = await Promise.all(promises);
-    results.sort((a, b) => a.index - b.index);
-    textPages.push(...results.map(r => r.text));
     
     if (pageCount < totalPages) {
       textPages.push(`\n[Processed ${pageCount}/${totalPages} pages for speed. Upload fewer pages for full extraction.]`);
@@ -318,23 +275,30 @@ async function extractTextFromPDF(pdfBuffer) {
   }
 }
 
-// Function to process image with OCR (optimized with worker pool)
+// Function to process image with OCR (low memory mode)
 async function processImageWithOCR(imageBuffer) {
-  const workerObj = await getAvailableWorker();
+  // Optimize image - smaller size for 512MB RAM
+  const optimizedBuffer = await sharp(imageBuffer)
+    .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }) // Smaller
+    .greyscale()
+    .normalize()
+    .toBuffer();
+  
+  // Create worker, use it, terminate immediately
+  const worker = await createWorker({
+    logger: () => {},
+    errorHandler: (err) => console.error('[OCR Error]', err)
+  });
   
   try {
-    // Optimize image before OCR for speed
-    const optimizedBuffer = await sharp(imageBuffer)
-      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .greyscale()
-      .normalize()
-      .sharpen()
-      .toBuffer();
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
     
-    const { data: { text } } = await workerObj.worker.recognize(optimizedBuffer);
+    const { data: { text } } = await worker.recognize(optimizedBuffer);
     return text;
   } finally {
-    releaseWorker(workerObj);
+    // CRITICAL: Always terminate to free memory
+    await worker.terminate();
   }
 }
 
@@ -345,6 +309,8 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
   let pages = 0;
   
   try {
+    console.log(`\n[${new Date().toISOString()}] 📥 File upload received`);
+    
     if (!req.file) {
       monitoring.recordRequest({ 
         fileType: 'none', 
@@ -357,6 +323,9 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
 
     // Fast file type detection - trust client MIME type
     const mimeType = req.file.mimetype;
+    const fileSize = (req.file.size / 1024).toFixed(2);
+    console.log(`📄 File: ${req.file.originalname || 'unknown'} (${fileSize}KB, ${mimeType})`);
+    
     let detectedFileType = null;
     
     // Only do deep detection if mimetype is missing or generic
@@ -369,10 +338,13 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
     // Handle different file types
     if (mimeType === 'application/pdf' || detectedFileType?.mime === 'application/pdf') {
       fileType = 'pdf';
+      console.log('🔄 Processing PDF...');
       result = await extractTextFromPDF(req.file.buffer);
       pages = result.split('\n\n--- PAGE BREAK ---\n\n').length;
       
       const processingTime = Date.now() - startTime;
+      console.log(`✅ PDF processed in ${processingTime}ms (${pages} pages)`);
+      
       monitoring.recordRequest({ 
         fileType, 
         processingTime, 
@@ -388,9 +360,12 @@ app.post('/api/ocr', upload.single('file'), async (req, res) => {
       });
     } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
       fileType = 'docx';
+      console.log('🔄 Processing DOCX...');
       result = await extractTextFromDOCX(req.file.buffer);
       
       const processingTime = Date.now() - startTime;
+      console.log(`✅ DOCX processed in ${processingTime}ms`);
+      
       monitoring.recordRequest({ 
         fileType, 
         processingTime, 
@@ -591,18 +566,15 @@ function startSelfPing() {
 }
 
 // Start server
-app.listen(PORT, async () => {
-  console.log(`🚀 OCR Server running on http://localhost:${PORT}`);
+app.listen(PORT, () => {
+  console.log(`\n🚀 OCR Server running on http://localhost:${PORT}`);
   console.log('📄 Supported file types: PDF, DOCX, PPTX, XLSX, DOC, PPT, XLS, TXT, CSV, RTF, PNG, JPEG, TIFF');
   console.log('⚡ Compression: Enabled');
   console.log('📊 Monitoring: Active');
-  console.log('🚀 Performance: Worker pool + parallel processing');
+  console.log('💾 Memory: Optimized for 512MB RAM (no worker pool)');
+  console.log('⚠️  PDF OCR: Limited to 2 pages max (RAM constraint)');
   console.log(`💉 Test with: curl -X POST -F "file=@path/to/your/file.pdf" http://localhost:${PORT}/api/ocr`);
-  
-  // Initialize worker pool for fast OCR
-  console.log('🔧 Initializing OCR worker pool...');
-  await initWorkerPool();
-  console.log('✅ Server ready for fast document processing!');
+  console.log('\n✅ Server ready! Low-memory mode active.\n');
   
   // Start self-ping in production
   if (process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production') {
