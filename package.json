@@ -3,8 +3,6 @@
   "version": "2.0.0",
   "description": "Advanced OCR server with PDF and image support",
   "main": "server.js",
-
-
   "engines": {
     "node": ">=16.0.0"
   },
@@ -14,20 +12,25 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "file-type": "^20.5.0",
-    "multer": "^1.4.5-lts.1",
-    "tesseract.js": "^4.1.1",
-    "pdf-parse": "^1.1.1",
-    "pdf-lib": "^1.17.1",
-    "pdf2pic": "^2.1.7",
-    "sharp": "^0.32.6",
+    "mammoth": "^1.11.0",
     "mime-types": "^2.1.35",
+    "multer": "^1.4.5-lts.1",
+    "officegen": "^0.6.5",
+    "officeparser": "^5.2.1",
+    "p-limit": "^4.0.0",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "pdf2pic": "^2.1.7",
+    "pptxgenjs": "^4.0.1",
+    "sharp": "^0.32.6",
+    "tesseract.js": "^4.1.1",
     "tmp-promise": "^3.0.3",
-    "p-limit": "^4.0.0"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
     "eslint": "^8.56.0",
     "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
     "supertest": "^6.3.3"
   },
   "keywords": [
