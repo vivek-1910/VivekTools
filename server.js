@@ -17,6 +17,9 @@ const mammoth = require('mammoth');
 const officeParser = require('officeparser');
 const xlsx = require('xlsx');
 
+const app = express();
+const PORT = process.env.PORT || 8000;
+
 // Performance: Reusable Tesseract worker pool
 let tesseractWorkerPool = [];
 const WORKER_POOL_SIZE = 4; // Increased for better parallelism
